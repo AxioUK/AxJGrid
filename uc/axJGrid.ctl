@@ -36,7 +36,7 @@ Attribute VB_Exposed = True
 '----------------------------------------
 ' AxioUK - David Rojas A. 21-11-2020
 '----------------------------------------
-' Version -> 2.5.8
+' Version -> 2.6.0
 ' Dependencias:
 '    - cScrollBar
 '    - cSubClass
@@ -90,12 +90,12 @@ End Type
 Private Type Rect
     l   As Long
     t   As Long
-    r   As Long
+    R   As Long
     b   As Long
 End Type
 
 Private Type UcsRGBQuad
-    r   As Byte
+    R   As Byte
     g   As Byte
     b   As Byte
     A   As Byte
@@ -169,7 +169,7 @@ Private Const HDF_IMAGE = &H800
 
 Private Type HDITEM
     mask        As Long
-    cxy         As Long
+    Width         As Long
     pszText     As String
     hbm         As Long
     cchTextMax  As Long
@@ -311,9 +311,9 @@ Public Event MouseExit()
 Public Event ColumnClick(ByVal Column As Long)
 Public Event ColumnRightClick(ByVal Column As Long)
 Public Event ColumnDblClick(ByVal Column As Long)
-Public Event ColumnSizeChangeStart(ByVal Column As Long, ByVal Width As Long, Cancel As Boolean)
-Public Event ColumnSizeChanging(ByVal Column As Long, ByVal Width As Long, Cancel As Boolean)
-Public Event ColumnSizeChanged(ByVal Column As Long, ByVal Width As Long)
+Public Event ColumnWidthChangedStart(ByVal Column As Long, ByVal Width As Long, Cancel As Boolean)
+Public Event ColumnWidthChanging(ByVal Column As Long, ByVal Width As Long, Cancel As Boolean)
+Public Event ColumnWidthChanged(ByVal Column As Long, ByVal Width As Long)
 Public Event ColumnDividerDblClick(ByVal Column As Long)
 
 'Scroll
@@ -407,12 +407,12 @@ Private m_Rounded       As Long
 Private m_Alpha         As Long
 
 Private m_RowH          As Long
+'Private m_ColW          As Long
 
 Private WithEvents c_SubClass   As cSubClass
 Attribute c_SubClass.VB_VarHelpID = -1
 Private WithEvents c_Scroll     As cScrollBars
 Attribute c_Scroll.VB_VarHelpID = -1
-
 
 Private m_hWnd      As Long
 Private m_Iml       As Long
@@ -443,7 +443,7 @@ Private e_hWnd      As Long
 
 Private b_DrawFlag  As Boolean
 Private b_EditFlag  As Boolean
-Private b_Prevent   As Boolean
+Private b_Redraw   As Boolean
 Private b_ResizeFlag As Boolean
 Private b_Merged    As Boolean
 Private m_SelFirst  As Boolean
@@ -467,8 +467,7 @@ Dim tHI    As HDITEM
     End With
     
     'i = SendMessage(m_hWnd, HDM_GETITEMCOUNT, 0, ByVal 0)
-    
-    tHI.cxy = Width
+    tHI.Width = Width
     tHI.mask = HDI_TEXT Or HDI_WIDTH Or HDI_FORMAT Or HDI_LPARAM
     tHI.fmt = Alignment Or HDF_STRING
     tHI.lParam = l
@@ -485,7 +484,7 @@ Dim tHI    As HDITEM
     UpdateScrollH
 End Sub
 
-Public Function AddItem(ByVal sText As String, Optional sSubText As String = vbNullString, Optional ByVal IconIndex As Long = -1, Optional ByVal ItemData As Long, Optional ByVal ItemTag As String = "") As Long
+Public Function AddItem(Optional ByVal sText As String = "", Optional sSubText As String = vbNullString, Optional ByVal IconIndex As Long = -1, Optional ByVal ItemData As Long, Optional ByVal ItemTag As String = "") As Long
 On Local Error Resume Next
 Dim l   As Long
 Dim i   As Long
@@ -505,10 +504,26 @@ Dim i   As Long
         Next
     End With
     AddItem = l
-    If b_Prevent Then Exit Function
+    If b_Redraw = False Then Exit Function
     UpdateScrollV
     DrawGrid
 End Function
+
+Public Sub AutoWidthCol(ByVal lCol As Long)
+Dim lCellW As Long, hCellW As Long
+Dim R As Long, sTemp As String
+
+For R = 1 To ItemCount - 1
+  sTemp = cRow(R).Cell(lCol).Text
+  lCellW = UserControl.TextWidth(sTemp)
+  If lCellW > hCellW Then hCellW = lCellW
+Next R
+  
+  cHeader(lCol).Width = hCellW + (Screen.TwipsPerPixelX)
+  RefreshGrid
+  SetHeaderWidth lCol, hCellW + (Screen.TwipsPerPixelX)
+  
+End Sub
 
 Public Sub ClearColumns()
 Dim l As Long
@@ -522,11 +537,37 @@ Dim l As Long
    UpdateGrid
 End Sub
 
+Public Sub ClearGrid()
+ClearItems
+ClearColumns
+DestroyGrid
+CreateGrid
+End Sub
+
 Public Sub ClearItems()
     Erase cRow
     UpdateScrollV
     DrawGrid
 End Sub
+
+Public Function ColorToHex(ByVal Color As Long) As String
+    Dim bytOut(11) As Byte
+    bytOut(0) = &H30& Or ((Color And &HF0&) \ &H10&)
+    bytOut(2) = &H30& Or (Color And &HF&)
+    bytOut(4) = &H30& Or ((Color And &HF000&) \ &H1000&)
+    bytOut(6) = &H30& Or ((Color And &HF00&) \ &H100&)
+    bytOut(8) = &H30& Or ((Color And &HF00000) \ &H100000)
+    bytOut(10) = &H30& Or ((Color And &HF0000) \ &H10000)
+    
+    If bytOut(0) > &H39 Then bytOut(0) = bytOut(0) + 7
+    If bytOut(2) > &H39 Then bytOut(2) = bytOut(2) + 7
+    If bytOut(4) > &H39 Then bytOut(4) = bytOut(4) + 7
+    If bytOut(6) > &H39 Then bytOut(6) = bytOut(6) + 7
+    If bytOut(8) > &H39 Then bytOut(8) = bytOut(8) + 7
+    If bytOut(10) > &H39 Then bytOut(10) = bytOut(10) + 7
+    
+    ColorToHex = bytOut
+End Function
 
 Public Sub CreateImageList(Optional Width As Integer = 16, Optional Height As Integer = 16, Optional hBitmap As Long, Optional MaskColor As Long = &HFFFFFFFF)
     If m_Iml And m_imlFlag Then ImageList_Destroy m_Iml
@@ -597,14 +638,14 @@ Dim Evt     As Boolean
     SendMessage m_hWnd, HDM_GETITEMRECT, e_Col, PT
     PT.l = PT.l + 1 - GetScroll(efsHorizontal)
     PT.t = ((e_Row * m_RowH) + lHeaderH) - GetScroll(efsVertical)
-    PT.r = cHeader(e_Col).Width - IIf(m_GridStyle = 2 Or m_GridStyle = 3, 1, 0)
+    PT.R = cHeader(e_Col).Width - IIf(m_GridStyle = 2 Or m_GridStyle = 3, 1, 0)
     PT.b = m_CellH
     
-    RaiseEvent RequestEditControl(e_Row, e_Col, PT.l, PT.t, PT.r, PT.b, e_Ctrl, Evt)
+    RaiseEvent RequestEditControl(e_Row, e_Col, PT.l, PT.t, PT.R, PT.b, e_Ctrl, Evt)
     If Not Evt Then
         If Not e_Ctrl Is Nothing Then
             With e_Ctrl
-                .Left = PT.l * 15: .Top = PT.t * 15: .Width = PT.r * 15: .Height = PT.b * 15
+                .Left = PT.l * 15: .Top = PT.t * 15: .Width = PT.R * 15: .Height = PT.b * 15
             End With
         End If
     End If
@@ -636,6 +677,19 @@ Dim Evt     As Boolean
 zCancel:
 
 End Sub
+
+Public Function GetWindowsDPI() As Double
+    Dim hDC As Long, LPX  As Double
+    hDC = GetDC(0)
+    LPX = CDbl(GetDeviceCaps(hDC, LOGPIXELSX))
+    ReleaseDC 0, hDC
+
+    If (LPX = 0) Then
+        GetWindowsDPI = 1#
+    Else
+        GetWindowsDPI = LPX / 96#
+    End If
+End Function
 
 Public Function ItemFind(ByVal Text As String, Optional ByVal Coincidence As eCoincidenceItem = [ccWholeWord], Optional ByVal IgnoreCase As Boolean = True, Optional ByVal Column As Long) As Long
 On Local Error GoTo zErr
@@ -704,6 +758,228 @@ Dim l As Long
         Me.HeaderHeight = Me.HeaderHeight + 22
     End If
  
+End Sub
+
+Public Sub RefreshGrid()
+    DrawGrid True
+End Sub
+
+Public Sub RemoveItem(ByVal Index As Long)
+On Local Error Resume Next
+Dim j As Integer
+
+    If ItemCount = 0 Or Index > ItemCount - 1 Or ItemCount < 0 Or Index < 0 Then Exit Sub
+    
+    If ItemCount > 1 Then
+         For j = Index To UBound(cRow) - 1
+            LSet cRow(j) = cRow(j + 1)
+         Next
+        ReDim Preserve cRow(UBound(cRow) - 1)
+    Else
+        Erase cRow
+    End If
+    
+    UpdateScrollV
+    If m_SelRow <> -1 Then
+        If m_SelRow = Index Then m_SelRow = -1
+        If m_SelRow > Index Then m_SelRow = m_SelRow - 1
+    End If
+    DrawGrid
+    
+End Sub
+
+Public Function SelectedItemData() As Long
+On Local Error GoTo zErr
+    If m_SelRow = -1 Then Exit Function
+    SelectedItemData = cRow(m_SelRow).Data
+    Exit Function
+zErr:
+    SelectedItemData = -1
+End Function
+
+Public Function SetControlToGrid(ByRef Ctrl As Object) As Boolean
+On Local Error Resume Next
+Dim lp_hWnd As Long
+    
+    lp_hWnd = Ctrl.hwnd
+    If lp_hWnd Then
+        SetControlToGrid = SetParent(lp_hWnd, hwnd) <> 0
+    End If
+End Function
+
+Public Sub SetItem(ByVal Item As Long, ByVal Col As Long, ByVal Text As String, Optional ByVal Icon As Long = -1)
+On Error GoTo Err
+     cRow(Item).Cell(Col).Text = Text
+     cRow(Item).Cell(Col).Icon = Icon
+Err:
+End Sub
+
+Public Sub SetRow(ByVal Item As Long, vRowData() As String)
+On Error Resume Next
+Dim i As Long
+    For i = 0 To ColumnCount - 1
+        cRow(Item).Cell(i).Text = vRowData(i)
+    Next
+    Call DrawGrid
+End Sub
+
+Public Sub SortItems(ByVal Column As Long, ByVal Order As eSortItemsOrder)
+Dim out As tRow
+Dim d1 As String
+Dim d2 As String
+Dim i As Long
+Dim j As Long
+Dim c As Long
+Dim l As Long
+Dim b As Boolean
+
+    If b_EditFlag Then EditEnd
+    
+    UserControl.AutoRedraw = False
+    
+    c = ItemCount - 1
+    l = m_SelRow
+    For i = 0 To c - 1
+         For j = 0 To (c - 1) - i
+         
+            d1 = cRow(j).Cell(Column).Text
+            d2 = cRow(j + 1).Cell(Column).Text
+            
+            b = IIf(Order = 0, d1 > d2, d1 < d2)
+            
+            If b Then
+            
+                LSet out = cRow(j)
+                LSet cRow(j) = cRow(j + 1)
+                LSet cRow(j + 1) = out
+                
+                If l = j Then
+                    l = j + 1
+                ElseIf l = j + 1 Then
+                    l = j
+                End If
+                
+            End If
+         Next
+    Next
+    
+    Me.SelectedItem = l
+    
+    UserControl.AutoRedraw = True
+End Sub
+
+Public Sub UpdateGrid()
+    UpdateScrollV
+    UpdateScrollH
+    RefreshGrid
+    RedrawHeader
+End Sub
+
+Private Sub ChangeSelection(eRow As Long, eCol As Long)
+    If eRow = m_SelRow And eCol = m_SelCol Then Exit Sub
+
+    m_SelRow = eRow
+    m_SelCol = eCol
+    
+    If m_SelRow = -1 Or m_SelCol = -1 Then
+        DrawGrid
+        GoTo Evt
+    End If
+    
+    If Not IsCompleteVisibleItem(eRow, eCol) Then
+        SetVisibleItem eRow, eCol
+    Else
+        DrawGrid
+    End If
+Evt:
+    RaiseEvent SelectionChanged(eRow, eCol)
+    
+End Sub
+
+Private Function ConvertColor(ByVal Color As Long, ByVal Opacity As Long) As Long
+    Dim BGRA(0 To 3) As Byte
+    OleTranslateColor Color, 0, VarPtr(Color)
+  
+    BGRA(3) = CByte((Abs(Opacity) / 100) * 255)
+    BGRA(0) = ((Color \ &H10000) And &HFF)
+    BGRA(1) = ((Color \ &H100) And &HFF)
+    BGRA(2) = (Color And &HFF)
+    CopyMemory ConvertColor, BGRA(0), 4&
+End Function
+
+Private Function CreateGrid()
+Dim wStyle      As Long
+Dim iFnt        As iFont
+
+    wStyle = &H40000000 Or &H10000000 Or HDS_HORZ
+    'wStyle = wStyle Or HDS_DRAGDROP
+    wStyle = wStyle Or HDS_BUTTONS
+        
+    m_hWnd = CreateWindowEx(0, "SysHeader32", "", wStyle, 0, 0, UserControl.ScaleWidth, m_HeaderH, hwnd, 0, App.hInstance, 0)
+    If m_hWnd Then
+    
+        Set iFnt = m_oFont
+        
+        ShowWindow m_hWnd, Abs(m_Header)
+        SendMessage m_hWnd, &H30, iFnt.hFont, 0&
+        SendMessage m_hWnd, &H2000 + 5, 1&, ByVal 0&
+        
+        With c_SubClass
+            If .Subclass(m_hWnd, , , Me) Then
+                .AddMsg m_hWnd, WM_PAINT, MSG_BEFORE
+                .AddMsg m_hWnd, WM_LBUTTONUP, MSG_BEFORE
+                .AddMsg m_hWnd, WM_LBUTTONDOWN, MSG_BEFORE
+                .AddMsg m_hWnd, WM_SIZE, MSG_BEFORE
+                .AddMsg m_hWnd, WM_ERASEBKGND, MSG_AFTER
+            End If
+        End With
+        
+    End If
+End Function
+
+Private Sub DestroyGrid()
+    If m_hWnd Then
+        c_SubClass.UnSubclass m_hWnd
+        ShowWindow m_hWnd, 0
+        DestroyWindow m_hWnd
+        m_hWnd = 0
+    End If
+End Sub
+
+'Private Sub DrawBack(lpDC As Long, Color As Long, Rct As Rect)
+'Dim hBrush  As Long
+'
+'    hBrush = CreateSolidBrush(Color)
+'    Call FillRect(lpDC, Rct, hBrush)
+'    Call DeleteObject(hBrush)
+'End Sub
+
+Private Sub DrawBorder()
+If UserControl.BorderStyle = 0 Then Exit Sub
+Dim Rct     As Rect
+Dim DC      As Long
+Dim ix      As Long
+Dim hPen    As Long
+Dim OldPen  As Long
+    
+  DC = GetWindowDC(hwnd)
+  GetWindowRect hwnd, Rct
+          
+  Rct.R = Rct.R - Rct.l
+  Rct.b = Rct.b - Rct.t
+  Rct.l = 0
+  Rct.t = 0
+  ix = GetSystemMetrics(6)
+  ExcludeClipRect DC, ix + 1, ix + 1, Rct.R - (ix + 1), Rct.b - (ix + 1)
+      
+              
+  hPen = CreatePen(0, 1, m_BorderColor)
+  OldPen = SelectObject(DC, hPen)
+  Rectangle DC, Rct.l, Rct.t, Rct.R, Rct.b
+  Call SelectObject(DC, OldPen)
+  DeleteObject hPen
+             
+  ReleaseDC hwnd, DC
 End Sub
 
 Private Function DrawCell(ByVal hDC As Long, Rect As RECTL, ByVal Color As OLE_COLOR, Round As Long, ByVal Alpha As Long, ByVal Selected As Integer, Optional ByVal Angulo As Single = 0) As Long
@@ -838,231 +1114,9 @@ Private Function DrawCell2(ByVal hDC As Long, Rect As RECTL, tEDF As tEventDrawi
     DrawCell2 = mPath
 End Function
 
-'Inicia GDI+
-Private Sub InitGDI()
-    Dim GdipStartupInput As GDIPlusStartupInput
-    GdipStartupInput.GdiPlusVersion = 1&
-    Call GdiplusStartup(GdipToken, GdipStartupInput, ByVal 0)
-End Sub
-
-'Termina GDI+
-Private Sub TerminateGDI()
-    Call GdiplusShutdown(GdipToken)
-End Sub
-
-Public Sub RedrawGrid()
-    DrawGrid True
-End Sub
-
-Public Sub RemoveItem(ByVal Index As Long)
-On Local Error Resume Next
-Dim j As Integer
-
-    If ItemCount = 0 Or Index > ItemCount - 1 Or ItemCount < 0 Or Index < 0 Then Exit Sub
-    
-    If ItemCount > 1 Then
-         For j = Index To UBound(cRow) - 1
-            LSet cRow(j) = cRow(j + 1)
-         Next
-        ReDim Preserve cRow(UBound(cRow) - 1)
-    Else
-        Erase cRow
-    End If
-    
-    UpdateScrollV
-    If m_SelRow <> -1 Then
-        If m_SelRow = Index Then m_SelRow = -1
-        If m_SelRow > Index Then m_SelRow = m_SelRow - 1
-    End If
-    DrawGrid
-    
-End Sub
-
-Public Function SelectedItemData() As Long
-On Local Error GoTo zErr
-    If m_SelRow = -1 Then Exit Function
-    SelectedItemData = cRow(m_SelRow).Data
-    Exit Function
-zErr:
-    SelectedItemData = -1
-End Function
-
-Public Function SetControlToGrid(ByRef Ctrl As Object) As Boolean
-On Local Error Resume Next
-Dim lp_hWnd As Long
-    
-    lp_hWnd = Ctrl.hwnd
-    If lp_hWnd Then
-        SetControlToGrid = SetParent(lp_hWnd, hwnd) <> 0
-    End If
-End Function
-
-Public Sub SetItem(ByVal Item As Long, ByVal Col As Long, ByVal Text As String, Optional ByVal Icon As Long = -1)
-On Error GoTo Err
-     cRow(Item).Cell(Col).Text = Text
-     cRow(Item).Cell(Col).Icon = Icon
-Err:
-End Sub
-
-Public Sub SetRow(ByVal Item As Long, vRowData() As String)
-On Error Resume Next
-Dim i As Long
-    For i = 0 To ColumnCount - 1
-        cRow(Item).Cell(i).Text = vRowData(i)
-    Next
-    Call DrawGrid
-End Sub
-
-Public Sub SortItems(ByVal Column As Long, ByVal Order As eSortItemsOrder)
-Dim out As tRow
-Dim d1 As String
-Dim d2 As String
-Dim i As Long
-Dim j As Long
-Dim c As Long
-Dim l As Long
-Dim b As Boolean
-
-    If b_EditFlag Then EditEnd
-    
-    UserControl.AutoRedraw = False
-    
-    c = ItemCount - 1
-    l = m_SelRow
-    For i = 0 To c - 1
-         For j = 0 To (c - 1) - i
-         
-            d1 = cRow(j).Cell(Column).Text
-            d2 = cRow(j + 1).Cell(Column).Text
-            
-            b = IIf(Order = 0, d1 > d2, d1 < d2)
-            
-            If b Then
-            
-                LSet out = cRow(j)
-                LSet cRow(j) = cRow(j + 1)
-                LSet cRow(j + 1) = out
-                
-                If l = j Then
-                    l = j + 1
-                ElseIf l = j + 1 Then
-                    l = j
-                End If
-                
-            End If
-         Next
-    Next
-    
-    Me.SelectedItem = l
-    
-    UserControl.AutoRedraw = True
-End Sub
-
-Public Sub UpdateGrid()
-    UpdateScrollV
-    UpdateScrollH
-    RedrawGrid
-    RedrawHeader
-End Sub
-
-Private Sub ChangeSelection(eRow As Long, eCol As Long)
-    If eRow = m_SelRow And eCol = m_SelCol Then Exit Sub
-
-    m_SelRow = eRow
-    m_SelCol = eCol
-    
-    If m_SelRow = -1 Or m_SelCol = -1 Then
-        DrawGrid
-        GoTo Evt
-    End If
-    
-    If Not IsCompleteVisibleItem(eRow, eCol) Then
-        SetVisibleItem eRow, eCol
-    Else
-        DrawGrid
-    End If
-Evt:
-    RaiseEvent SelectionChanged(eRow, eCol)
-    
-End Sub
-
-Private Function CreateGrid()
-Dim wStyle      As Long
-Dim iFnt        As iFont
-
-    wStyle = &H40000000 Or &H10000000 Or HDS_HORZ
-    'wStyle = wStyle Or HDS_DRAGDROP
-    wStyle = wStyle Or HDS_BUTTONS
-        
-    m_hWnd = CreateWindowEx(0, "SysHeader32", "", wStyle, 0, 0, UserControl.ScaleWidth, m_HeaderH, hwnd, 0, App.hInstance, 0)
-    If m_hWnd Then
-    
-        Set iFnt = m_oFont
-        
-        ShowWindow m_hWnd, Abs(m_Header)
-        SendMessage m_hWnd, &H30, iFnt.hFont, 0&
-        SendMessage m_hWnd, &H2000 + 5, 1&, ByVal 0&
-        
-        With c_SubClass
-            If .Subclass(m_hWnd, , , Me) Then
-                .AddMsg m_hWnd, WM_PAINT, MSG_BEFORE
-                .AddMsg m_hWnd, WM_LBUTTONUP, MSG_BEFORE
-                .AddMsg m_hWnd, WM_LBUTTONDOWN, MSG_BEFORE
-                .AddMsg m_hWnd, WM_SIZE, MSG_BEFORE
-                .AddMsg m_hWnd, WM_ERASEBKGND, MSG_AFTER
-            End If
-        End With
-        
-    End If
-End Function
-Private Sub DestroyGrid()
-    If m_hWnd Then
-        c_SubClass.UnSubclass m_hWnd
-        ShowWindow m_hWnd, 0
-        DestroyWindow m_hWnd
-        m_hWnd = 0
-    End If
-End Sub
-
-'Private Sub DrawBack(lpDC As Long, Color As Long, Rct As Rect)
-'Dim hBrush  As Long
-'
-'    hBrush = CreateSolidBrush(Color)
-'    Call FillRect(lpDC, Rct, hBrush)
-'    Call DeleteObject(hBrush)
-'End Sub
-
-Private Sub DrawBorder()
-If UserControl.BorderStyle = 0 Then Exit Sub
-Dim Rct     As Rect
-Dim DC      As Long
-Dim ix      As Long
-Dim hPen    As Long
-Dim OldPen  As Long
-    
-  DC = GetWindowDC(hwnd)
-  GetWindowRect hwnd, Rct
-          
-  Rct.r = Rct.r - Rct.l
-  Rct.b = Rct.b - Rct.t
-  Rct.l = 0
-  Rct.t = 0
-  ix = GetSystemMetrics(6)
-  ExcludeClipRect DC, ix + 1, ix + 1, Rct.r - (ix + 1), Rct.b - (ix + 1)
-      
-              
-  hPen = CreatePen(0, 1, m_BorderColor)
-  OldPen = SelectObject(DC, hPen)
-  Rectangle DC, Rct.l, Rct.t, Rct.r, Rct.b
-  Call SelectObject(DC, OldPen)
-  DeleteObject hPen
-             
-  ReleaseDC hwnd, DC
-End Sub
-
 Private Sub DrawGrid(Optional ByVal bForce As Boolean)
 On Local Error Resume Next
-Dim lcol    As Long
+Dim lCol    As Long
 Dim lRow    As Long
 Dim ly      As Long
 Dim lx      As Long
@@ -1081,7 +1135,7 @@ Dim c       As Long
 Dim cWidth  As Long
 Dim cFore   As OLE_COLOR
 
-    If b_Prevent Then Exit Sub
+    If b_Redraw = False Then Exit Sub
     
     b_DrawFlag = True
     With UserControl
@@ -1090,7 +1144,7 @@ Dim cFore   As OLE_COLOR
       .BackColor = m_BackColor
     End With
     
-    lcol = 0
+    lCol = 0
     lRow = 0
 
     lx = -GetScroll(efsHorizontal)
@@ -1107,14 +1161,14 @@ Dim cFore   As OLE_COLOR
             
             SetRect iRct, 0, ly, UserControl.ScaleWidth, ly + m_CellH
                                     
-           Do While lcol < ColumnCount And lx < UserControl.ScaleWidth
+           Do While lCol < ColumnCount And lx < UserControl.ScaleWidth
            
-              lColW = cHeader(lcol).Width
+              lColW = cHeader(lCol).Width
               
               If lx + lColW > 0 Then
               
                   If (lSCol = -1) Then
-                      lSCol = lcol
+                      lSCol = lCol
                       lSx = lx
                   End If
 ''-> AxioUK
@@ -1134,9 +1188,9 @@ Dim cFore   As OLE_COLOR
                 '''End Draw Cells
                   
                   'Selection
-                  If lRow = m_SelRow And lcol = m_SelCol And Not m_FullRow Then
+                  If lRow = m_SelRow And lCol = m_SelCol And Not m_FullRow Then
                       DrawCell uDC, cRect, m_SelColor, m_Rounded, m_Alpha, 1
-                  ElseIf lRow = t_Row And lcol = t_Col And Not m_FullRow Then
+                  ElseIf lRow = t_Row And lCol = t_Col And Not m_FullRow Then
                       DrawCell uDC, cRect, m_SelColor, m_Rounded, m_Alpha, 0
                   ElseIf m_FullRow Then
                       If lRow = m_SelRow Then
@@ -1152,31 +1206,31 @@ Dim cFore   As OLE_COLOR
                  ' End If
                                     
                   'RequestItemDrawing
-                  tEvt = EventDrawingField(lRow, lcol)
+                  tEvt = EventDrawingField(lRow, lCol)
                   If tEvt.Border <> -1 Then DrawCell2 uDC, cRect, tEvt, m_Rounded, 0
-                  RaiseEvent ItemDrawing(lRow, lcol, uDC, iRct.l, iRct.t, iRct.r - iRct.l, iRct.b - iRct.t, tEvt.Cancel)
+                  RaiseEvent ItemDrawing(lRow, lCol, uDC, iRct.l, iRct.t, iRct.R - iRct.l, iRct.b - iRct.t, tEvt.Cancel)
                   If tEvt.Cancel Then GoTo zDrawNext
                   
-                  If m_Iml <> 0 And cRow(lRow).Cell(lcol).Icon <> -1 Then
+                  If m_Iml <> 0 And cRow(lRow).Cell(lCol).Icon <> -1 Then
                       
                       LPX = IIf(m_ImgX + 6 > lColW, lColW - 6, m_ImgX)
-                      Select Case cHeader(lcol).IAlign
+                      Select Case cHeader(lCol).IAlign
                           Case 0: SetRect tRct, 4, ((m_CellH - m_ImgY) \ 2), LPX, m_ImgY  'Left
                           Case 1: SetRect tRct, lColW - LPX - 1, ((m_CellH - m_ImgY) \ 2), LPX - 1, m_ImgY 'Right
-                                  If tRct.r < 0 Then tRct.r = 0
+                                  If tRct.R < 0 Then tRct.R = 0
                           Case 2: 'tRct.R = 0 'Center
                                   SetRect tRct, (lColW - m_ImgX) \ 2, ((m_CellH - m_ImgY) \ 2), LPX, m_ImgY
-                                  If lColW - 6 < m_ImgX Then tRct.r = 0
+                                  If lColW - 6 < m_ImgX Then tRct.R = 0
                       End Select
-                      If tRct.r Then ImageList_DrawEx m_Iml, cRow(lRow).Cell(lcol).Icon, uDC, lx + tRct.l, ly + tRct.t, tRct.r, 0, &HFFFFFFFF, &HFF000000, 0
+                      If tRct.R Then ImageList_DrawEx m_Iml, cRow(lRow).Cell(lCol).Icon, uDC, lx + tRct.l, ly + tRct.t, tRct.R, 0, &HFFFFFFFF, &HFF000000, 0
                       LPX = m_ImgX + 2
                   Else
                       LPX = 0
                   End If
                   
-                  If Trim(cRow(lRow).Cell(lcol).Text) <> vbNullString Then
+                  If Trim(cRow(lRow).Cell(lCol).Text) <> vbNullString Then
                   
-                      If Trim(cRow(lRow).Cell(lcol).SubText) <> vbNullString Then
+                      If Trim(cRow(lRow).Cell(lCol).SubText) <> vbNullString Then
                         'Text
                         SetRect tRct, lx + 6 + LPX, ly - (Th / 2), lx + lColW - 2, ly + m_CellH
                         'SubText
@@ -1187,7 +1241,7 @@ Dim cFore   As OLE_COLOR
                       End If
                     
                       If LPX Then
-                          Select Case cHeader(lcol).IAlign
+                          Select Case cHeader(lCol).IAlign
                               Case 0 'Left
                               Case 1 'Right
                                   OffsetRect tRct, -LPX, 0
@@ -1195,14 +1249,14 @@ Dim cFore   As OLE_COLOR
                                   SetRect tRct, lx + 6, ly, lx + lColW - 2, ly + m_CellH
                           End Select
                       End If
-                      If tRct.r < tRct.l Then tRct.r = tRct.l
+                      If tRct.R < tRct.l Then tRct.R = tRct.l
                       
                                               
-                      If tRct.r - tRct.l > 0 Then
+                      If tRct.R - tRct.l > 0 Then
                         'TEXT Normal
                         UserControl.ForeColor = IIf(tEvt.Fore1 <> -1, tEvt.Fore1, m_ForeColor)
                         'TEXT Selection
-                        If lRow = m_SelRow And lcol = m_SelCol And Not m_FullRow Then
+                        If lRow = m_SelRow And lCol = m_SelCol And Not m_FullRow Then
                             UserControl.ForeColor = InvColor(m_SelColor)
                         ElseIf m_FullRow Then
                             If lRow = m_SelRow Then
@@ -1210,12 +1264,12 @@ Dim cFore   As OLE_COLOR
                             End If
                         End If
                         Set UserControl.Font = m_cFont
-                        DrawText uDC, cRow(lRow).Cell(lcol).Text, Len(cRow(lRow).Cell(lcol).Text), tRct, GetTextFlag(lcol)
+                        DrawText uDC, cRow(lRow).Cell(lCol).Text, Len(cRow(lRow).Cell(lCol).Text), tRct, GetTextFlag(lCol)
                         
                         'SUBTEXT Normal
                         UserControl.ForeColor = IIf(tEvt.Fore2 <> -1, tEvt.Fore2, m_ForeColor2)
                         'SUBTEXT Selection
-                        If lRow = m_SelRow And lcol = m_SelCol And Not m_FullRow Then
+                        If lRow = m_SelRow And lCol = m_SelCol And Not m_FullRow Then
                             UserControl.ForeColor = InvColor(m_SelColor)
                         ElseIf m_FullRow Then
                             If lRow = m_SelRow Then
@@ -1223,19 +1277,19 @@ Dim cFore   As OLE_COLOR
                             End If
                         End If
                         Set UserControl.Font = m_sFont
-                        DrawText uDC, cRow(lRow).Cell(lcol).SubText, Len(cRow(lRow).Cell(lcol).SubText), sRct, GetTextFlag(lcol)
+                        DrawText uDC, cRow(lRow).Cell(lCol).SubText, Len(cRow(lRow).Cell(lCol).SubText), sRct, GetTextFlag(lCol)
                       End If
                   End If
 zDrawNext:
               End If
               
-              lx = lx + cHeader(lcol).Width
-              lcol = lcol + 1
+              lx = lx + cHeader(lCol).Width
+              lCol = lCol + 1
               
            Loop
            
           '?Reset to Scroll Position
-          lcol = lSCol
+          lCol = lSCol
           lx = lSx
         End If
         
@@ -1285,7 +1339,7 @@ Dim W As Long, H As Long
     
    X = Rct.l
    Y = Rct.t
-   W = (Rct.l + Rct.r)
+   W = (Rct.l + Rct.R)
    H = (Rct.t + Rct.b) - 2
    
     DC = GetDC(0)
@@ -1295,7 +1349,7 @@ Dim W As Long, H As Long
             
     hBrush = CreateSolidBrush(m_BackColor)
     Call SelectObject(lpDC, hBrush)
-    Rectangle lpDC, Rct.l, Rct.t, Rct.r, Rct.b
+    Rectangle lpDC, Rct.l, Rct.t, Rct.R, Rct.b
     
     hPen = CreatePen(0, 3, vbWhite) 'pvAlphaBlend(m_GridColor, vbWhite, 1))
     Call SelectObject(lpDC, hPen)
@@ -1403,11 +1457,11 @@ Dim bFlag       As Boolean
     '/Crear DC en memoria
     DC = GetDC(0)
     hDCMemory = CreateCompatibleDC(0)
-    hBmp = CreateCompatibleBitmap(DC, PS.rcPaint.r, PS.rcPaint.b)
+    hBmp = CreateCompatibleBitmap(DC, PS.rcPaint.R, PS.rcPaint.b)
     Call SelectObject(hDCMemory, hBmp)
     'hDCMemory = PS.Hdc
     
-    pRenderSkin hDCMemory, 0, 0, PS.rcPaint.r, PS.rcPaint.b, m_hSkin, 0, 0, 4, 26, 0
+    pRenderSkin hDCMemory, 0, 0, PS.rcPaint.R, PS.rcPaint.b, m_hSkin, 0, 0, 4, 26, 0
     SetBkMode hDCMemory, 1
     
     Set iFont = m_oFont
@@ -1425,7 +1479,7 @@ Dim bFlag       As Boolean
         SendMessage m_hWnd, HDM_GETITEMRECT, j, iRct
         CopyRect tRct, iRct
         
-        tRct.r = tRct.r - 10
+        tRct.R = tRct.R - 10
         OffsetRect tRct, 5, 0
         
         '\Is Merged?
@@ -1437,7 +1491,7 @@ Dim bFlag       As Boolean
                     mRct.b = 20
                     mFlag = True
                 Else
-                    mRct.r = mRct.r + (iRct.r - iRct.l)
+                    mRct.R = mRct.R + (iRct.R - iRct.l)
                 End If
                 iRct.t = 20
             End If
@@ -1446,15 +1500,15 @@ Dim bFlag       As Boolean
         If iIndex = j And m_bDown Then 'MouseDown Then
         
             OffsetRect tRct, 1, 1
-            pRenderSkin hDCMemory, iRct.l, iRct.t, iRct.r - iRct.l, iRct.b - iRct.t, m_hSkin, 10, 0, 5, 26, 2
+            pRenderSkin hDCMemory, iRct.l, iRct.t, iRct.R - iRct.l, iRct.b - iRct.t, m_hSkin, 10, 0, 5, 26, 2
             SetTextColor hDCMemory, GetPixel(m_hSkin, 15, 2)
         
         ElseIf iIndex = j Then
-            pRenderSkin hDCMemory, iRct.l, iRct.t, iRct.r - iRct.l, iRct.b - iRct.t, m_hSkin, 5, 0, 5, 26, 2
+            pRenderSkin hDCMemory, iRct.l, iRct.t, iRct.R - iRct.l, iRct.b - iRct.t, m_hSkin, 5, 0, 5, 26, 2
             SetTextColor hDCMemory, GetPixel(m_hSkin, 15, 1)
             
         Else
-            pRenderSkin hDCMemory, iRct.l, iRct.t, iRct.r - iRct.l, iRct.b - iRct.t, m_hSkin, 0, 0, 5, 26, 2
+            pRenderSkin hDCMemory, iRct.l, iRct.t, iRct.R - iRct.l, iRct.b - iRct.t, m_hSkin, 0, 0, 5, 26, 2
             SetTextColor hDCMemory, GetPixel(m_hSkin, 15, 0)
             
         End If
@@ -1464,7 +1518,7 @@ Dim bFlag       As Boolean
         '\Draw Merged Columns
         If mDraw And b_Merged Then
         
-            pRenderSkin hDCMemory, mRct.l, 0, mRct.r - mRct.l, mRct.b, m_hSkin, 0, 0, 5, 25, 2
+            pRenderSkin hDCMemory, mRct.l, 0, mRct.R - mRct.l, mRct.b, m_hSkin, 0, 0, 5, 25, 2
             
             bFlag = m_oFont.Bold
             If Not bFlag And v_Merged(m).eBold Then
@@ -1488,7 +1542,7 @@ Dim bFlag       As Boolean
         
     Next
     
-    StretchBlt PS.hDC, 0, 0, PS.rcPaint.r, PS.rcPaint.b, hDCMemory, 0, 0, PS.rcPaint.r, PS.rcPaint.b, vbSrcCopy
+    StretchBlt PS.hDC, 0, 0, PS.rcPaint.R, PS.rcPaint.b, hDCMemory, 0, 0, PS.rcPaint.R, PS.rcPaint.b, vbSrcCopy
     
     Call EndPaint(m_hWnd, PS)
     DeleteObject hBmp
@@ -1534,7 +1588,7 @@ Dim bFlag       As Boolean
     '/Crear DC en memoria
     DC = GetDC(0)
     hDCMemory = CreateCompatibleDC(0)
-    hBmp = CreateCompatibleBitmap(DC, PS.rcPaint.r, PS.rcPaint.b)
+    hBmp = CreateCompatibleBitmap(DC, PS.rcPaint.R, PS.rcPaint.b)
     Call SelectObject(hDCMemory, hBmp)
     
     SetBkMode hDCMemory, 1
@@ -1557,17 +1611,9 @@ Dim bFlag       As Boolean
         CopyRect tRct, iRct
         
 '//-> tRct = Text Rect
-        tRct.r = tRct.r - 10
+        tRct.R = tRct.R - 10
         OffsetRect tRct, 5, 0
-        
-'//-> Round=0
-        With cRect
-          .Left = iRct.l + 1
-          .Top = iRct.t
-          .Width = iRct.r - iRct.l
-          .Height = iRct.b - iRct.t
-        End With
-        
+               
 '\Is Merged?
         If IsMerged(j, m, mDraw) Then
             tRct.t = 20
@@ -1576,11 +1622,18 @@ Dim bFlag       As Boolean
                 mRct.b = 22
                 mFlag = True
             Else
-                mRct.r = mRct.r + (iRct.r - iRct.l)
+                mRct.R = mRct.R + (iRct.R - iRct.l)
             End If
             iRct.t = 20
             iRct.b = (iRct.b / 2) - 17
         End If
+        
+        With cRect
+          .Left = iRct.l
+          .Top = iRct.t
+          .Width = (iRct.r - iRct.l)
+          .Height = iRct.t + iRct.b
+        End With
           
         If iIndex = j And m_bDown Then 'MouseDown Then
             OffsetRect tRct, 1, 1
@@ -1600,7 +1653,7 @@ Dim bFlag       As Boolean
             With hRect
               .Left = mRct.l
               .Top = mRct.t
-              .Width = (mRct.r - mRct.l)
+              .Width = (mRct.R - mRct.l)
               .Height = (mRct.t + mRct.b) - 1
             End With
             
@@ -1628,7 +1681,7 @@ Dim bFlag       As Boolean
         
     Next
     
-    StretchBlt PS.hDC, 0, 0, PS.rcPaint.r, PS.rcPaint.b, hDCMemory, 0, 0, PS.rcPaint.r, PS.rcPaint.b, vbSrcCopy
+    StretchBlt PS.hDC, 0, 0, PS.rcPaint.R, PS.rcPaint.b, hDCMemory, 0, 0, PS.rcPaint.R, PS.rcPaint.b, vbSrcCopy
     
     Call EndPaint(m_hWnd, PS)
     Call CloseThemeData(uTheme)
@@ -1639,7 +1692,7 @@ Dim bFlag       As Boolean
 
 End Sub
 
-Private Function EventDrawingField(lRow As Long, lcol As Long) As tEventDrawing
+Private Function EventDrawingField(lRow As Long, lCol As Long) As tEventDrawing
 
     With EventDrawingField
         .Back = -1
@@ -1649,7 +1702,7 @@ Private Function EventDrawingField(lRow As Long, lcol As Long) As tEventDrawing
         .Alpha = 0
         .Cancel = False
         .Ident = 0
-         RaiseEvent RequestItemDrawingData(lRow, lcol, .Fore1, .Fore2, .Back, .Border, .Alpha, .Ident)
+         RaiseEvent RequestItemDrawingData(lRow, lCol, .Fore1, .Fore2, .Back, .Border, .Alpha, .Ident)
     End With
    
 End Function
@@ -1663,18 +1716,6 @@ Dim tHDI    As HDHITTESTINFO
     Call SendMessage(m_hWnd, HDM_HITTEST, 0, tHDI)
     
     GetColFromX = tHDI.iItem
-    
-    'iCol = Header.GetHeaderByX(X)
-    If iCol <> -1 Then
-        'If Header.GetHeaderX(iCol) + Header.GetHeaderWidth(iCol) < X Then iCol = iCol + 1
-        'If iCol > Header.GetHeaderCount - 1 Then iCol = -1
-    End If
-    
-    If iCol <> -1 Then
-        'GetColFromX = 0 'Header.GetHeaderData(iCol)
-    Else
-        'GetColFromX = -1
-    End If
     
 End Function
 
@@ -1698,6 +1739,17 @@ Private Function GetTextFlag(Col As Long) As Long
 
 End Function
 
+'Inicia GDI+
+Private Sub InitGDI()
+    Dim GdipStartupInput As GDIPlusStartupInput
+    GdipStartupInput.GdiPlusVersion = 1&
+    Call GdiplusStartup(GdipToken, GdipStartupInput, ByVal 0)
+End Sub
+
+Private Function InvColor(ByVal Color As OLE_COLOR) As OLE_COLOR
+  InvColor = &HFFFFFF - Color
+End Function
+
 Private Function IsCompleteVisibleItem(eRow As Long, eCol As Long) As Boolean
 On Local Error Resume Next
 Dim Y       As Long
@@ -1717,6 +1769,14 @@ Dim lP      As Long
     bCol = X >= 0 And X + cHeader(eCol).Width <= UserControl.ScaleWidth
     
     IsCompleteVisibleItem = bRow And bCol
+End Function
+
+Private Function IsDarkColor(ByVal lColor As Long) As Boolean
+    Dim BGRA(0 To 3) As Byte
+    OleTranslateColor lColor, 0, VarPtr(lColor)
+    CopyMemory BGRA(0), lColor, 4&
+  
+    IsDarkColor = ((CLng(BGRA(0)) + (CLng(BGRA(1) * 3)) + CLng(BGRA(2))) / 2) < 382
 End Function
 
 Private Function IsMerged(Col As Long, MergeIndex As Long, uDrawFlag As Boolean) As Boolean
@@ -1771,8 +1831,8 @@ Private Sub MoveHeader(Optional ByVal lLeft As Long = -1, Optional ByVal lWidth 
     MoveWindow m_hWnd, lLeft, 0, lWidth, lHeight, 1
 End Sub
 
-Private Function pGetHeaderItemInfo(ByVal lcol As Long, tHI As HDITEM) As Boolean
-      If Not (SendMessage(m_hWnd, HDM_GETITEM, lcol, tHI) = 0) Then
+Private Function pGetHeaderItemInfo(ByVal lCol As Long, tHI As HDITEM) As Boolean
+      If Not (SendMessage(m_hWnd, HDM_GETITEM, lCol, tHI) = 0) Then
          pGetHeaderItemInfo = True
       End If
 End Function
@@ -1828,10 +1888,24 @@ Private Sub pSelectSkin(Optional lHandle As Long = 0)
 
 End Sub
 
-Private Function pSetHeaderItemInfo(ByVal lcol As Long, tHI As HDITEM) As Boolean
-      If Not (SendMessage(m_hWnd, HDM_SETITEM, lcol, tHI) = 0) Then
+Private Function pSetHeaderItemInfo(ByVal lCol As Long, tHI As HDITEM) As Boolean
+      If Not (SendMessage(m_hWnd, HDM_SETITEM, lCol, tHI) = 0) Then
          pSetHeaderItemInfo = True
       End If
+End Function
+
+Private Function pvAlphaBlend(ByVal clrFirst As Long, ByVal clrSecond As Long, ByVal lAlpha As Long) As Long
+    Dim clrFore         As UcsRGBQuad
+    Dim clrBack         As UcsRGBQuad
+    
+    OleTranslateColor clrFirst, 0, VarPtr(clrFore)
+    OleTranslateColor clrSecond, 0, VarPtr(clrBack)
+    With clrFore
+        .R = (.R * lAlpha + clrBack.R * (255 - lAlpha)) / 255
+        .g = (.g * lAlpha + clrBack.g * (255 - lAlpha)) / 255
+        .b = (.b * lAlpha + clrBack.b * (255 - lAlpha)) / 255
+    End With
+    CopyMemory pvAlphaBlend, clrFore, 4
 End Function
 
 Private Sub RedrawHeader()
@@ -1844,12 +1918,12 @@ Dim tHI As HDITEM
 
     tHI.mask = HDI_WIDTH
     Call pGetHeaderItemInfo(eCol, tHI)
-    'If tHI.cxy <> lWidth Then
-    tHI.cxy = lWidth
+    
+    tHI.Width = lWidth
     If (pSetHeaderItemInfo(eCol, tHI)) Then
-        'RaiseEvent ColumnSizeChanged(Index, Value)
+        RaiseEvent ColumnWidthChanged(eCol, lWidth)
     End If
-    'End If
+
 End Sub
 
 Private Sub SetVisibleItem(eRow As Long, eCol As Long)
@@ -1881,65 +1955,14 @@ zErr:
     DrawGrid
 End Sub
 
-Public Function ColorToHex(ByVal Color As Long) As String
-    Dim bytOut(11) As Byte
-    bytOut(0) = &H30& Or ((Color And &HF0&) \ &H10&)
-    bytOut(2) = &H30& Or (Color And &HF&)
-    bytOut(4) = &H30& Or ((Color And &HF000&) \ &H1000&)
-    bytOut(6) = &H30& Or ((Color And &HF00&) \ &H100&)
-    bytOut(8) = &H30& Or ((Color And &HF00000) \ &H100000)
-    bytOut(10) = &H30& Or ((Color And &HF0000) \ &H10000)
-    
-    If bytOut(0) > &H39 Then bytOut(0) = bytOut(0) + 7
-    If bytOut(2) > &H39 Then bytOut(2) = bytOut(2) + 7
-    If bytOut(4) > &H39 Then bytOut(4) = bytOut(4) + 7
-    If bytOut(6) > &H39 Then bytOut(6) = bytOut(6) + 7
-    If bytOut(8) > &H39 Then bytOut(8) = bytOut(8) + 7
-    If bytOut(10) > &H39 Then bytOut(10) = bytOut(10) + 7
-    
-    ColorToHex = bytOut
-End Function
-
-Private Function pvAlphaBlend(ByVal clrFirst As Long, ByVal clrSecond As Long, ByVal lAlpha As Long) As Long
-    Dim clrFore         As UcsRGBQuad
-    Dim clrBack         As UcsRGBQuad
-    
-    OleTranslateColor clrFirst, 0, VarPtr(clrFore)
-    OleTranslateColor clrSecond, 0, VarPtr(clrBack)
-    With clrFore
-        .r = (.r * lAlpha + clrBack.r * (255 - lAlpha)) / 255
-        .g = (.g * lAlpha + clrBack.g * (255 - lAlpha)) / 255
-        .b = (.b * lAlpha + clrBack.b * (255 - lAlpha)) / 255
-    End With
-    CopyMemory pvAlphaBlend, clrFore, 4
-End Function
-
-Private Function ConvertColor(ByVal Color As Long, ByVal Opacity As Long) As Long
-    Dim BGRA(0 To 3) As Byte
-    OleTranslateColor Color, 0, VarPtr(Color)
-  
-    BGRA(3) = CByte((Abs(Opacity) / 100) * 255)
-    BGRA(0) = ((Color \ &H10000) And &HFF)
-    BGRA(1) = ((Color \ &H100) And &HFF)
-    BGRA(2) = (Color And &HFF)
-    CopyMemory ConvertColor, BGRA(0), 4&
-End Function
-
-Private Function IsDarkColor(ByVal lColor As Long) As Boolean
-    Dim BGRA(0 To 3) As Byte
-    OleTranslateColor lColor, 0, VarPtr(lColor)
-    CopyMemory BGRA(0), lColor, 4&
-  
-    IsDarkColor = ((CLng(BGRA(0)) + (CLng(BGRA(1) * 3)) + CLng(BGRA(2))) / 2) < 382
-End Function
-
-Private Function InvColor(ByVal Color As OLE_COLOR) As OLE_COLOR
-  InvColor = &HFFFFFF - Color
-End Function
-
 Private Function SysColor(oColor As Long) As Long
     OleTranslateColor2 oColor, 0, SysColor
 End Function
+
+'Termina GDI+
+Private Sub TerminateGDI()
+    Call GdiplusShutdown(GdipToken)
+End Sub
 
 Private Sub UpateValues1()
 
@@ -2060,19 +2083,6 @@ Private Sub UserControl_DblClick()
     RaiseEvent DblClick
 End Sub
 
-Public Function GetWindowsDPI() As Double
-    Dim hDC As Long, LPX  As Double
-    hDC = GetDC(0)
-    LPX = CDbl(GetDeviceCaps(hDC, LOGPIXELSX))
-    ReleaseDC 0, hDC
-
-    If (LPX = 0) Then
-        GetWindowsDPI = 1#
-    Else
-        GetWindowsDPI = LPX / 96#
-    End If
-End Function
-
 Private Sub UserControl_Initialize()
     Set c_SubClass = New cSubClass
     Set c_Scroll = New cScrollBars
@@ -2143,27 +2153,27 @@ Dim iCol As Long
             Dim pChar       As String
             Dim iChar       As String
             Dim bFound      As Boolean
-            Dim lcol        As Long
+            Dim lCol        As Long
         
             lStart = m_SelRow + 1
-            lcol = IIf(m_FullRow, 0, m_SelCol)
+            lCol = IIf(m_FullRow, 0, m_SelCol)
             If lStart > ItemCount - 1 Then lStart = 0
             pChar = Chr(KeyCode)
             If pChar = "" Then Exit Sub
             
             For j = lStart To ItemCount - 1
-                iChar = UCase(Left(cRow(j).Cell(lcol).Text, 1))
+                iChar = UCase(Left(cRow(j).Cell(lCol).Text, 1))
                 If iChar <> "" And pChar = iChar Then
-                    ChangeSelection j, lcol
+                    ChangeSelection j, lCol
                     bFound = True
                     Exit For
                 End If
             Next
             If Not bFound And lStart > 0 Then
                 For j = 0 To lStart '- 1
-                    iChar = UCase(Left(cRow(j).Cell(lcol).Text, 1))
+                    iChar = UCase(Left(cRow(j).Cell(lCol).Text, 1))
                     If iChar <> "" And pChar = iChar Then
-                        ChangeSelection j, lcol
+                        ChangeSelection j, lCol
                         Exit For
                     End If
                 Next
@@ -2339,7 +2349,7 @@ End Property
 Property Get Alpha() As Long: Alpha = m_Alpha: End Property
 Property Let Alpha(vAlpha As Long)
   m_Alpha = vAlpha
-  RedrawGrid
+  RefreshGrid
   RedrawHeader
   PropertyChanged "Alpha"
 End Property
@@ -2347,7 +2357,7 @@ End Property
 Property Get BackColor() As OLE_COLOR: BackColor = m_BackColor: End Property
 Property Let BackColor(ByVal Value As OLE_COLOR)
     m_BackColor = Value
-    RedrawGrid
+    RefreshGrid
     RedrawHeader
     PropertyChanged "BackColor"
 End Property
@@ -2357,14 +2367,36 @@ Property Let BorderColor(ByVal Value As OLE_COLOR)
     m_BorderColor = Value
     UserControl.Cls
     DrawBorder
-    RedrawGrid
+    RefreshGrid
     RedrawHeader
     PropertyChanged "BorderColor"
+End Property
+
+Property Get CellText(ByVal Row As Long, Optional ByVal Column As Long) As String
+On Local Error Resume Next
+    CellText = cRow(Row).Cell(Column).Text
+End Property
+
+Property Let CellText(ByVal Row As Long, Optional ByVal Column As Long, Value As String)
+On Local Error Resume Next
+    If cRow(Row).Cell(Column).Text = Value Then Exit Property
+    cRow(Row).Cell(Column).Text = Value
+    If IsVisibleItem(Row, Column) Then DrawGrid
 End Property
 
 Property Get ColumnCount() As Long
 On Local Error Resume Next
     ColumnCount = UBound(cHeader) + 1
+End Property
+
+Public Property Get ColumnWidth(lCol As Long) As Long
+  ColumnWidth = cHeader(lCol).Width
+End Property
+
+Public Property Let ColumnWidth(lCol As Long, ByVal NewColWidth As Long)
+  cHeader(lCol).Width = NewColWidth
+  RefreshGrid
+  SetHeaderWidth lCol, NewColWidth
 End Property
 
 Property Get DrawEmptyGrid() As Boolean: DrawEmptyGrid = m_DrawEmpty: End Property
@@ -2386,30 +2418,30 @@ Property Set FontCellText(ByVal Value As StdFont)
     PropertyChanged "FontCellText"
 End Property
 
-Property Get FontSubText() As StdFont: Set FontSubText = m_sFont: End Property
-Property Set FontSubText(ByVal Value As StdFont)
-    Set m_sFont = Value
-    PropertyChanged "FontSubText"
-End Property
-
 Property Get FontHeader() As StdFont: Set FontHeader = m_oFont: End Property
 Property Set FontHeader(ByVal Value As StdFont)
     Set m_oFont = Value
     PropertyChanged "HeaderFont"
 End Property
 
-Public Property Get ForeColor() As OLE_COLOR: ForeColor = m_ForeColor: End Property
-Public Property Let ForeColor(ByVal Value As OLE_COLOR)
-    m_ForeColor = Value
-    RedrawGrid
-    PropertyChanged "ForeColor"
+Property Get FontSubText() As StdFont: Set FontSubText = m_sFont: End Property
+Property Set FontSubText(ByVal Value As StdFont)
+    Set m_sFont = Value
+    PropertyChanged "FontSubText"
 End Property
 
 Public Property Get ForeColor2() As OLE_COLOR: ForeColor2 = m_ForeColor2: End Property
 Public Property Let ForeColor2(ByVal Value As OLE_COLOR)
     m_ForeColor2 = Value
-    RedrawGrid
+    RefreshGrid
     PropertyChanged "ForeColor2"
+End Property
+
+Public Property Get ForeColor() As OLE_COLOR: ForeColor = m_ForeColor: End Property
+Public Property Let ForeColor(ByVal Value As OLE_COLOR)
+    m_ForeColor = Value
+    RefreshGrid
+    PropertyChanged "ForeColor"
 End Property
 
 Property Get FullRowSelection() As Boolean: FullRowSelection = m_FullRow: End Property
@@ -2424,7 +2456,7 @@ Property Let Gradient(Value As Boolean)
     m_Gradient = Value
     'DrawGrid True
     PropertyChanged "Gradient"
-    RedrawGrid
+    RefreshGrid
     RedrawHeader
 End Property
 
@@ -2432,7 +2464,7 @@ Property Get GridColor() As OLE_COLOR: GridColor = m_GridColor: End Property
 Property Let GridColor(ByVal Value As OLE_COLOR)
     m_GridColor = Value
     PropertyChanged "GridColor"
-    RedrawGrid
+    RefreshGrid
     RedrawHeader
 End Property
 
@@ -2471,7 +2503,10 @@ Property Set HeaderSkin(oPic As StdPicture)
   PropertyChanged "HeaderSkin"
 End Property
 
-Property Get hwnd() As Long: hwnd = UserControl.hwnd: End Property
+Property Get hwnd() As Long
+  hwnd = UserControl.hwnd
+End Property
+
 Property Get ItemCount() As Long
 On Local Error Resume Next
     ItemCount = UBound(cRow) + 1
@@ -2505,43 +2540,21 @@ On Local Error Resume Next
     If IsVisibleItem(Item, Column) Then DrawGrid
 End Property
 
-Property Get CellText(ByVal Row As Long, Optional ByVal Column As Long) As String
-On Local Error Resume Next
-    CellText = cRow(Row).Cell(Column).Text
-End Property
-Property Let CellText(ByVal Row As Long, Optional ByVal Column As Long, Value As String)
-On Local Error Resume Next
-    If cRow(Row).Cell(Column).Text = Value Then Exit Property
-    cRow(Row).Cell(Column).Text = Value
-    If IsVisibleItem(Row, Column) Then DrawGrid
-End Property
-
-Property Get SubText(ByVal Row As Long, Optional ByVal Column As Long) As String
-On Local Error Resume Next
-    SubText = cRow(Row).Cell(Column).SubText
-End Property
-Property Let SubText(ByVal Row As Long, Optional ByVal Column As Long, Value As String)
-On Local Error Resume Next
-    If cRow(Row).Cell(Column).SubText = Value Then Exit Property
-    cRow(Row).Cell(Column).SubText = Value
-    If IsVisibleItem(Row, Column) Then DrawGrid
-End Property
-
 Property Get MergedCount() As Long
 On Local Error GoTo Err
     MergedCount = UBound(v_Merged) + 1
 Err:
 End Property
 
-Property Let PreventGrid(Value As Boolean)
-    b_Prevent = Value
-    If Not Value Then UpdateGrid
+Property Let Redraw(Value As Boolean)
+    b_Redraw = Value
+    If Value Then UpdateGrid
 End Property
 
 Property Get RoundedCell() As Long: RoundedCell = m_Rounded: End Property
 Property Let RoundedCell(Value As Long)
   m_Rounded = Value
-  RedrawGrid
+  RefreshGrid
   RedrawHeader
   PropertyChanged "RoundedCell"
 End Property
@@ -2588,6 +2601,18 @@ Property Let StripedGrid(ByVal Value As Boolean)
     PropertyChanged "Striped"
 End Property
 
+Property Get SubText(ByVal Row As Long, Optional ByVal Column As Long) As String
+On Local Error Resume Next
+    SubText = cRow(Row).Cell(Column).SubText
+End Property
+
+Property Let SubText(ByVal Row As Long, Optional ByVal Column As Long, Value As String)
+On Local Error Resume Next
+    If cRow(Row).Cell(Column).SubText = Value Then Exit Property
+    cRow(Row).Cell(Column).SubText = Value
+    If IsVisibleItem(Row, Column) Then DrawGrid
+End Property
+
 Private Property Get lGridH() As Long
     lGridH = UserControl.ScaleHeight - lHeaderH
 End Property
@@ -2597,6 +2622,9 @@ Private Property Get lHeaderH() As Long
 End Property
 
 
+'=============================================================
+'====SUBCLASS=================================================
+'=============================================================
 '- ordinal #1
 Private Sub WndProc(ByVal bBefore As Boolean, _
        ByRef bHandled As Boolean, _
@@ -2632,12 +2660,12 @@ Dim Evt As Boolean
                                   Exit Sub
                                 End If
                                 m_bmdhFlag = False
-                                RaiseEvent ColumnSizeChangeStart(tHDN.iItem, lHDI(1), Evt)
+                                RaiseEvent ColumnWidthChangedStart(tHDN.iItem, lHDI(1), Evt)
                                 If Evt Then lReturn = 1: bHandled = True
                                 
                             Case HDN_TRACK
                                 CopyMemory lHDI(0), ByVal tHDN.lPtrHDItem, 8
-                                RaiseEvent ColumnSizeChanging(tHDN.iItem, lHDI(1), Evt)
+                                RaiseEvent ColumnWidthChanging(tHDN.iItem, lHDI(1), Evt)
                                 
                                 If Evt Then
                                     lReturn = 1: bHandled = True
@@ -2686,19 +2714,19 @@ Dim Evt As Boolean
                     DC = GetWindowDC(hwnd)
                     GetWindowRect hwnd, Rct
                             
-                    Rct.r = Rct.r - Rct.l
+                    Rct.R = Rct.R - Rct.l
                     Rct.b = Rct.b - Rct.t
                     Rct.l = 0
                     Rct.t = 0
                     ix = GetSystemMetrics(6)
-                    ExcludeClipRect DC, ix + 1, ix + 1, Rct.r - (ix + 1), Rct.b - (ix + 1)
+                    ExcludeClipRect DC, ix + 1, ix + 1, Rct.R - (ix + 1), Rct.b - (ix + 1)
                         
                     Dim hPen        As Long
                     Dim OldPen      As Long
                                 
                     hPen = CreatePen(0, 1, m_BorderColor)
                     OldPen = SelectObject(DC, hPen)
-                    Rectangle DC, Rct.l, Rct.t, Rct.r, Rct.b
+                    Rectangle DC, Rct.l, Rct.t, Rct.R, Rct.b
                     Call SelectObject(DC, OldPen)
                     DeleteObject hPen
                                
@@ -2727,8 +2755,8 @@ Dim Evt As Boolean
                 Case WM_SIZE
                      If Not b_ResizeFlag Then
                         GetWindowRect m_hWnd, Rct
-                        Rct.r = Rct.r - Rct.l
-                        If Rct.r < UserControl.ScaleWidth Then MoveHeader 0, UserControl.ScaleWidth + 5
+                        Rct.R = Rct.R - Rct.l
+                        If Rct.R < UserControl.ScaleWidth Then MoveHeader 0, UserControl.ScaleWidth + 5
                      End If
                      
                 Case WM_LBUTTONDOWN, WM_LBUTTONUP
@@ -2755,7 +2783,3 @@ Dim Evt As Boolean
     End Select
  
 End Sub
-
-
-
-
